@@ -65,7 +65,7 @@ public class HateoasMiddleware(ConfigurationsResolver configurationsResolver) : 
                 var newArray = new JsonArray();
                 foreach (var item in jsonArray)
                 {
-                    newArray.Add(TraverseAndAddLinks(item, schema));
+                    newArray.Add(TraverseAndAddLinks(item, schema).DeepClone());
                 }
                 return new JsonObject
                 {
@@ -78,7 +78,9 @@ public class HateoasMiddleware(ConfigurationsResolver configurationsResolver) : 
                 if (schema != null)
                 {
                     var configuration = GetHateoasConfiguration(schema.Reference.Id);
+                    // Initially, add all the links from the configuration
                     linksWithPlaceholders = GenerateLinks(configuration);
+                    HandleConditions(configuration, jsonObject, linksWithPlaceholders);
                 }
 
                 var newObject = new JsonObject();
@@ -99,7 +101,7 @@ public class HateoasMiddleware(ConfigurationsResolver configurationsResolver) : 
                             // For arrays, we find the schema by the "Items" properties and pass it to each item in the array
                             var arrayElementSchema =
                                 schema?.Properties.FirstOrDefault(x => x.Key == kvp.Key).Value.Items;
-                            newObject.Add("_embedded", TraverseAndAddLinks(arr, arrayElementSchema));
+                            newObject.Add("_embedded", TraverseAndAddLinks(arr, arrayElementSchema).DeepClone());
                             break;
                         default:
                             newObject.Add(kvp.Key, kvp.Value?.DeepClone());
@@ -107,7 +109,7 @@ public class HateoasMiddleware(ConfigurationsResolver configurationsResolver) : 
                     }
                 }
 
-                if (linksWithPlaceholders == null)
+                if (linksWithPlaceholders == null || linksWithPlaceholders.Count == 0)
                 {
                     return newObject;
                 }
@@ -120,6 +122,43 @@ public class HateoasMiddleware(ConfigurationsResolver configurationsResolver) : 
             // If the node is a primitive value we return it as it is, otherwise we have different behavior for objects and arrays
             default:
                 return node;
+        }
+    }
+
+    private static void HandleConditions(IBaseConfiguration configuration, JsonObject jsonObject,
+        Dictionary<string, string> linksWithPlaceholders)
+    {
+        if (configuration is not IConditionalConfiguration conditionalConfiguration)
+        {
+            return;
+        }
+        
+        // Iterate over all the conditions and if some of them are met, remove the corresponding links
+        foreach (var (linkName, (propertyName, type, condition)) in conditionalConfiguration.Conditions)
+        {
+            if (jsonObject[propertyName] == null)
+            {
+                continue;
+            }
+
+            object convertedValue;
+            try
+            {
+                convertedValue = typeof(JsonNode)
+                    .GetMethod("GetValue", Array.Empty<Type>())
+                    ?.MakeGenericMethod(type)
+                    .Invoke(jsonObject[propertyName], null);
+            }
+            // Can happen only if developer uses a non-primitive type for condition (or an array)
+            catch
+            {
+                continue;
+            }
+                            
+            if (!condition(convertedValue))
+            {
+                linksWithPlaceholders.Remove(linkName);
+            }
         }
     }
 
@@ -160,7 +199,7 @@ public class HateoasMiddleware(ConfigurationsResolver configurationsResolver) : 
                 o.Value.OperationId == x.Key)).Key);
     }
 
-    private async Task<OpenApiDocument> GetOpenApiDocument()
+    private static async Task<OpenApiDocument> GetOpenApiDocument()
     {
         var httpClient = new HttpClient
         {
@@ -188,7 +227,7 @@ public class HateoasMiddleware(ConfigurationsResolver configurationsResolver) : 
         return schema;
     }
 
-    private OperationType GetOperationType(string method)
+    private static OperationType GetOperationType(string method)
     {
         return method switch
         {

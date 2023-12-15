@@ -20,3 +20,8 @@ public interface IBaseConfiguration
     // IMPORTANT! With current implementation, it's assumed the link should be unique per gateway (among all the services).
     public Dictionary<string, string> Links { get; }
 }
+
+public interface IConditionalConfiguration : IBaseConfiguration
+{
+    public Dictionary<string, (string, Type, Func<object, bool>)> Conditions { get; }
+}
